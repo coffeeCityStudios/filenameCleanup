@@ -6,6 +6,8 @@
 
 Version 1.0. For Linux.
 
+November 22, 2026
+
 [filenameCleanup](filenameCleanup) is a simple bash script of eleven actions that tidy up filenames.
 
 Only `mv`, `basename` and `cat` are used.
