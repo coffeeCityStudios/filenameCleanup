@@ -74,7 +74,7 @@ Options can go anywhere in the command.
 
 # Section 6: Try it out
 
-`fruit-test-files.zip` holds a directory of sample files for each action, and one to preview the `NO CHANGES MADE` messages.
+[fruit-test-files.zip](fruit-test-files.zip) holds a directory of sample files for each action, and one to preview the `NO CHANGES MADE` messages.
 
 # Section 7: The one-liners
 
