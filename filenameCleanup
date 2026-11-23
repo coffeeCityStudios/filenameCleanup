@@ -1,0 +1,477 @@
+#!/usr/bin/env bash
+# filenameCleanup: eleven actions that tidy up filenames in a directory.
+# Copyright (C) 2026  Coffee City Studios
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# ---------------------------------------------------------------------------
+# 1. Settings
+# ---------------------------------------------------------------------------
+#
+target_directory="$PWD"    # the current working directory as a full path
+dry_run="no"               # --dry-run switches this to yes
+#
+# ---------------------------------------------------------------------------
+# 2. Rename & Safety
+# ---------------------------------------------------------------------------
+#
+files_needing_change=0
+#
+rename_file() {
+local file_path="$1"
+local new_name="$2"
+local old_name
+    old_name="$(basename "$file_path")"
+local new_path="$target_directory/$new_name"
+
+if [ "$new_name" = "$old_name" ]; then                                      # is the file already compliant?
+        return 0                                                            # if so, do nothing
+fi
+
+files_needing_change=$((files_needing_change + 1))                          # the file is not compliant
+
+    if [ -z "$new_name" ]; then                                             # would the file be left nameless?
+        echo "NO CHANGES MADE: $old_name would have become nameless."       # if so, do nothing
+        return 0
+    fi
+        if [ -e "$new_path" ]; then                                         # does a file with the new name exist already?
+            echo "NO CHANGES MADE: a file named $new_name already exists."  # if so, do nothing
+            return 0
+        fi
+
+if [ ! -w "$target_directory" ]; then                                       # may you write to this directory?
+    echo "NO CHANGES MADE: the given directory, $target_directory, is read-only (no write permission)." >&2
+    exit 1                                                                  # if not, do nothing & exit the script
+fi
+
+    if [ "${new_name:0:1}" = "." ]; then                                    # would the new filename hide the file?
+        hidden_old_paths+=("$file_path")                                    # if so, wait until later
+        hidden_new_names+=("$new_name")
+        return 0
+    fi
+            if [ "$dry_run" = "yes" ]; then                                 # are we performing a dry run?
+                echo "WOULD RENAME: $old_name -> $new_name"                 # if so, say so
+                return 0
+            fi
+
+mv -- "$file_path" "$new_path" && echo "RENAMED: $old_name -> $new_name"    # the rename takes place here
+}
+
+hidden_old_paths=()
+hidden_new_names=()
+
+ask_about_hidden_files() {
+    local index=0
+    local file_path old_name new_name new_path question answer
+    while [ "$index" -lt "${#hidden_old_paths[@]}" ]; do
+        file_path="${hidden_old_paths[$index]}"
+        old_name="$(basename "$file_path")"
+        new_name="${hidden_new_names[$index]}"
+        new_path="$target_directory/$new_name"
+        if [ -e "$new_path" ]; then                                         # checked again on purpose since a previous...
+            echo "NO CHANGES MADE: a file named $new_name already exists."  # ...yes could've taken the name
+        elif [ "$dry_run" = "yes" ]; then
+            echo "WOULD ASK: $old_name -> $new_name"
+        else
+            question="$old_name would become a hidden file,"                # ask the question
+            question="$question because its new name, $new_name, starts with a period."
+            if ! read -r -p "$question Rename it anyway? [y/N] " answer; then # get the answer
+                echo "NO CHANGES MADE: $old_name would become a hidden file, and no answer was given." # when an answer can't be read
+            elif [[ "$answer" == [yY]* ]]; then
+                mv -- "$file_path" "$new_path" && echo "RENAMED: $old_name -> $new_name" # perform the rename
+            else
+                echo "NO CHANGES MADE: $old_name would become a hidden file, and you chose not to proceed." # when you say no
+            fi
+        fi
+        index=$((index + 1))
+    done
+    hidden_old_paths=()                           # both lists start empty for the next action
+    hidden_new_names=()
+}
+
+
+# ---------------------------------------------------------------------------
+# 3. Actions
+# ---------------------------------------------------------------------------
+# Every action has the same shape:
+#   - loop over everything in the target directory ("$target_directory"/*)
+#   - quietly skip an item that does not exist
+#   - get the item's name (old_name)
+#   - report and skip anything that is not a regular file; this is what keeps
+#     subdirectories out. Hidden files never show up at all, because "*" does not
+#     match names that start with "."
+#   - work out the new name
+#   - hand the old path and the new name to rename_file, which does the rest
+
+action_addSpaceAfterFirstPeriod() {
+    local file_path old_name new_name periods_only period_count
+    local before_first_period after_first_period
+    for file_path in "$target_directory"/*; do
+        if [ ! -e "$file_path" ]; then continue; fi # if this doesn't exist, skip it
+        old_name="$(basename "$file_path")"         # all actions have this & the next check
+        if [ ! -f "$file_path" ]; then echo "NO CHANGES MADE: $old_name is a directory, not a file."; continue; fi # skip directories
+        periods_only="${old_name//[!.]/}"          # delete every character that is NOT a period...
+        period_count="${#periods_only}"            # ...and count the periods that are left
+        if [ "$period_count" -lt 2 ]; then continue; fi    # if only 1 period, then ignore as it may affect the extension
+        before_first_period="${old_name%%.*}"      # grab everything before the first period
+        after_first_period="${old_name#*.}"        # & grab everything after it
+        if [ "${after_first_period:0:1}" = " " ]; then continue; fi   # does it already have a space? If so, do nothing
+        new_name="$before_first_period. $after_first_period"    # if not...
+        rename_file "$file_path" "$new_name"                    # ...rename it
+    done
+}
+
+action_collapseMultiSpacesToSingleSpace() {
+    local one_space=" "
+    local two_spaces="$one_space$one_space"
+    local file_path old_name new_name
+    for file_path in "$target_directory"/*; do
+        if [ ! -e "$file_path" ]; then continue; fi
+        old_name="$(basename "$file_path")"
+        if [ ! -f "$file_path" ]; then echo "NO CHANGES MADE: $old_name is a directory, not a file."; continue; fi
+        new_name="$old_name"
+        while [[ "$new_name" == *"$two_spaces"* ]]; do
+            new_name="${new_name//"$two_spaces"/$one_space}" # remove spaces
+        done
+        rename_file "$file_path" "$new_name"
+    done
+}
+
+action_deleteHyphens() {
+    local file_path old_name new_name
+    for file_path in "$target_directory"/*; do
+        if [ ! -e "$file_path" ]; then continue; fi
+        old_name="$(basename "$file_path")"
+        if [ ! -f "$file_path" ]; then echo "NO CHANGES MADE: $old_name is a directory, not a file."; continue; fi
+        new_name="${old_name//-/}"                # every "-" is deleted
+        rename_file "$file_path" "$new_name"
+    done
+}
+
+action_deleteSpaces() {
+    local file_path old_name new_name
+    for file_path in "$target_directory"/*; do
+        if [ ! -e "$file_path" ]; then continue; fi
+        old_name="$(basename "$file_path")"
+        if [ ! -f "$file_path" ]; then echo "NO CHANGES MADE: $old_name is a directory, not a file."; continue; fi
+        new_name="${old_name// /}"                # every space is deleted
+        rename_file "$file_path" "$new_name"
+    done
+}
+
+action_deleteUnderscores() {
+    local file_path old_name new_name
+    for file_path in "$target_directory"/*; do
+        if [ ! -e "$file_path" ]; then continue; fi
+        old_name="$(basename "$file_path")"
+        if [ ! -f "$file_path" ]; then echo "NO CHANGES MADE: $old_name is a directory, not a file."; continue; fi
+        new_name="${old_name//_/}"                # every "_" is deleted
+        rename_file "$file_path" "$new_name"
+    done
+}
+
+action_hyphensToSpaces() {
+    local file_path old_name new_name
+    for file_path in "$target_directory"/*; do
+        if [ ! -e "$file_path" ]; then continue; fi
+        old_name="$(basename "$file_path")"
+        if [ ! -f "$file_path" ]; then echo "NO CHANGES MADE: $old_name is a directory, not a file."; continue; fi
+        new_name="${old_name//-/ }"               # every "-" becomes a space
+        rename_file "$file_path" "$new_name"
+    done
+}
+
+action_removeText() {
+    local text_to_remove="$1"
+    local file_path old_name new_name
+    for file_path in "$target_directory"/*; do
+        if [ ! -e "$file_path" ]; then continue; fi
+        old_name="$(basename "$file_path")"
+        if [ ! -f "$file_path" ]; then echo "NO CHANGES MADE: $old_name is a directory, not a file."; continue; fi
+        new_name="${old_name//"$text_to_remove"/}" # remove the given text
+        rename_file "$file_path" "$new_name"
+    done
+}
+
+action_spacesToHyphens() {
+    local file_path old_name new_name
+    for file_path in "$target_directory"/*; do
+        if [ ! -e "$file_path" ]; then continue; fi
+        old_name="$(basename "$file_path")"
+        if [ ! -f "$file_path" ]; then echo "NO CHANGES MADE: $old_name is a directory, not a file."; continue; fi
+        new_name="${old_name// /-}"                # every space becomes "-"
+        rename_file "$file_path" "$new_name"
+    done
+}
+
+action_spacesToUnderscores() {
+    local file_path old_name new_name
+    for file_path in "$target_directory"/*; do
+        if [ ! -e "$file_path" ]; then continue; fi
+        old_name="$(basename "$file_path")"
+        if [ ! -f "$file_path" ]; then echo "NO CHANGES MADE: $old_name is a directory, not a file."; continue; fi
+        new_name="${old_name// /_}"                # every space becomes "_"
+        rename_file "$file_path" "$new_name"
+    done
+}
+
+action_underscoresToSpaces() {
+    local file_path old_name new_name
+    for file_path in "$target_directory"/*; do
+        if [ ! -e "$file_path" ]; then continue; fi
+        old_name="$(basename "$file_path")"
+        if [ ! -f "$file_path" ]; then echo "NO CHANGES MADE: $old_name is a directory, not a file."; continue; fi
+        new_name="${old_name//_/ }"               # every "_" becomes a space
+        rename_file "$file_path" "$new_name"
+    done
+}
+
+action_zeroPadFileCount() {
+    local file_path old_name new_name number
+    local total_files=0 padding_width counter=0
+    for file_path in "$target_directory"/*; do
+        if [ -f "$file_path" ]; then total_files=$((total_files + 1)); fi   # count files only
+    done
+    padding_width="${#total_files}"                                         # the number of digits in the count
+    echo "Found $total_files files, numbering with $padding_width digit(s)"
+    for file_path in "$target_directory"/*; do
+        if [ ! -e "$file_path" ]; then continue; fi
+        old_name="$(basename "$file_path")"
+        if [ ! -f "$file_path" ]; then echo "NO CHANGES MADE: $old_name is a directory, not a file."; continue; fi
+        counter=$((counter + 1))
+        number="$(printf "%0${padding_width}d" "$counter")"   # %02d turns 1 into 01, %03d into 001, etc.
+        new_name="$number $old_name"
+        rename_file "$file_path" "$new_name"
+    done
+}
+
+# ---------------------------------------------------------------------------
+# 4. Help Page
+# ---------------------------------------------------------------------------
+
+print_usage() {
+    cat <<'USAGE'
+                                    The Filename Cleanup Project
+Eleven actions that tidy up filenames in a directory.
+
+Usage:  filenameCleanup [options] ACTION [ACTION ...]
+
+- Actions run left to right.
+- Only files inside the current working directory, or the directory you stipulate, are acted upon.
+- Subdirectories are skipped and reported.
+- Hidden files are silently skipped.
+- If a new name is already taken, then the file is skipped and reported.
+
+A rename that would turn a file into a hidden file is held back and asked about later.
+
+An action that finds every file already compliant reports this as
+"NO CHANGES MADE: all files in compliance."
+
+Actions:
+  addSpaceAfterFirstPeriod            01.Song.mp3              ->  01. Song.mp3
+                                      skipped when a filename has only 1 period, presumably the one before the extension
+
+  collapseMultiSpacesToSingleSpace    my     spreadsheet.ods   ->  my spreadsheet.ods
+
+  deleteHyphens                       my-archive.zip           ->  myarchive.zip
+
+  deleteSpaces                        my web page.html         ->  mywebpage.html
+
+  deleteUnderscores                   my_presentation.odp      ->  mypresentation.odp
+
+  hyphensToSpaces                     my-text.pdf              ->  my text.pdf
+
+  removeText "TEXT"                   my picture copy.png      ->  my picture.png
+                                      when "TEXT" equals " copy"
+                                      note the space before "copy"
+
+  spacesToHyphens                     my program.rpm           ->  my-program.rpm
+
+  spacesToUnderscores                 my video.mp4             ->  my_video.mp4
+
+  underscoresToSpaces                 my_file.txt              ->  my file.txt
+
+  zeroPadFileCount                    Intro.mp3                ->  01 Intro.mp3 ... 86 Zebra.mp3
+                                      the numbering follows the file count: at nine files or
+                                      fewer, 1 digit is used; at ten or more, 2 digits are
+                                      used; and so on
+
+TEXT is removed exactly as typed. If it contains $ ! " \ or ` (backtick), type
+it between single quotes instead of double quotes:   removeText 'Wow! $5'
+
+Each action also has a shortcode, which can be used instead:
+  addSpaceAfterFirstPeriod            add1s
+
+  collapseMultiSpacesToSingleSpace    cms
+
+  deleteHyphens                       delh
+
+  deleteSpaces                        dels
+
+  deleteUnderscores                   delu
+
+  hyphensToSpaces                     hts
+
+  removeText                          rmt
+
+  spacesToHyphens                     sth
+
+  spacesToUnderscores                 stu
+
+  underscoresToSpaces                 uts
+
+  zeroPadFileCount                    zpfc
+
+Shortcodes and full names can also be mixed in one command, like this:
+  filenameCleanup cms zeroPadFileCount
+
+rmt takes its TEXT the same way removeText does, like this:
+  filenameCleanup rmt " copy"
+
+Options (can go anywhere in the command):
+  --dry-run, -dr                      is used to preview changes without committing to them.
+  --dir DIRECTORY                     works on another directory instead of the current one.
+  --help, -h                          prints this help page.
+
+When something is not renamed, the script tells you why:
+  ERROR                               the command itself is wrong, such as a typo.
+
+  NO CHANGES MADE                     the command itself is fine, but something could not,
+                                      or did not need to, be renamed.
+
+Examples:
+  filenameCleanup collapseMultiSpacesToSingleSpace zeroPadFileCount
+  filenameCleanup delu spacesToHyphens
+  filenameCleanup --dry-run underscoresToSpaces spacesToHyphens
+  filenameCleanup --dir ~/Music/album rmt " - Copy"
+USAGE
+}
+
+# ---------------------------------------------------------------------------
+# 5. Reading the command line, then running the actions
+# ---------------------------------------------------------------------------
+
+actions_to_run=()
+
+if [ $# -eq 0 ]; then
+    print_usage
+    exit 1
+fi
+
+while [ $# -gt 0 ]; do # shortcodes -> full names
+    case "$1" in
+        add1s) word="addSpaceAfterFirstPeriod" ;;
+        cms)   word="collapseMultiSpacesToSingleSpace" ;;
+        delh)  word="deleteHyphens" ;;
+        dels)  word="deleteSpaces" ;;
+        delu)  word="deleteUnderscores" ;;
+        hts)   word="hyphensToSpaces" ;;
+        rmt)   word="removeText" ;;
+        sth)   word="spacesToHyphens" ;;
+        stu)   word="spacesToUnderscores" ;;
+        uts)   word="underscoresToSpaces" ;;
+        zpfc)  word="zeroPadFileCount" ;;
+        *)     word="$1" ;;                    # not a shortcode: keep the word as typed
+    esac
+    case "$word" in
+        --dry-run|-dr)
+            dry_run="yes"
+            shift
+            ;;
+        --dir)
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --dir expected a directory, but no directory was given." >&2
+                exit 1
+            fi
+            target_directory="$2"
+            shift 2
+            ;;
+        --help|-help|-h|help)
+            print_usage
+            exit 0
+            ;;
+        --)
+            shift
+            ;;
+        removeText)
+            if [ $# -lt 2 ]; then
+                echo "ERROR: removeText expected text to remove, but no text was given." >&2
+                exit 1
+            fi
+            if [ -z "$2" ]; then
+                echo "NO CHANGES MADE: no text to remove was given." >&2
+                exit 1
+            fi
+            actions_to_run+=("removeText" "$2")   # stored as two list entries: the name, then its text
+            shift 2
+            ;;
+        addSpaceAfterFirstPeriod|collapseMultiSpacesToSingleSpace|deleteHyphens|deleteSpaces|deleteUnderscores|hyphensToSpaces|spacesToHyphens|spacesToUnderscores|underscoresToSpaces|zeroPadFileCount)
+            actions_to_run+=("$word")
+            shift
+            ;;
+        *)
+            echo "ERROR: $1 is not recognized as an action or option." >&2
+            echo "Run 'filenameCleanup --help' to see the list." >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [ ${#actions_to_run[@]} -eq 0 ]; then
+    echo "ERROR: at least one action was expected, but no actions were given." >&2
+    print_usage
+    exit 1
+fi
+
+# folder security
+if [ ! -e "$target_directory" ]; then
+    echo "NO CHANGES MADE: the given directory, $target_directory, could not be found." >&2
+    exit 1
+elif [ ! -d "$target_directory" ]; then
+    echo "NO CHANGES MADE: the given path, $target_directory, is a file, not a directory." >&2
+    exit 1
+elif [ ! -r "$target_directory" ]; then
+    echo "NO CHANGES MADE: the given directory, $target_directory, cannot be read (no read permission)." >&2
+    exit 1
+elif [ ! -x "$target_directory" ]; then
+    echo "NO CHANGES MADE: the given directory, $target_directory, cannot be entered (no execute permission)." >&2
+    exit 1
+fi
+
+if [ "$dry_run" = "yes" ]; then
+    echo "DRY RUN: nothing will be renamed. Each action previews against the names as they are now."
+fi
+
+index=0
+while [ "$index" -lt ${#actions_to_run[@]} ]; do
+    action="${actions_to_run[$index]}"
+    files_needing_change=0
+    case "$action" in
+        removeText)
+            text_to_remove="${actions_to_run[$((index + 1))]}"
+            echo "--- removeText \"$text_to_remove\" ---"
+            action_removeText "$text_to_remove"
+            index=$((index + 2))
+            ;;
+        *)
+            echo "--- $action ---"
+            "action_$action"                      # calls the function named after the action, e.g. action_spacesToHyphens
+            index=$((index + 1))
+            ;;
+    esac
+    ask_about_hidden_files                        # renames that would hide a file were held back - ask about them now
+    if [ "$files_needing_change" -eq 0 ]; then
+        echo "NO CHANGES MADE: all files in compliance."
+    fi
+done
